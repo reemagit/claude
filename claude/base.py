@@ -12,10 +12,10 @@ class GraphEnsemble:
 		self.directed = directed
 		self.fixed_edges = None
 
-	def fit(self, constraints, method='anderson', opt_kwargs=None):
+	def fit(self, constraints, method='anderson', opt_kwargs=None, theta0=None):
 		self.N_theta = sum([len(c.c_vals) for c in constraints])
 		self.constraints = constraints
-		self.theta = self.eval_theta(method, opt_kwargs)
+		self.theta = self.eval_theta(method, opt_kwargs, theta0)
 		self.adj_matrix = self.eval_adj_matrix(self.theta)
 		self.sigma = self.eval_sigma(self.theta)
 
@@ -24,18 +24,23 @@ class GraphEnsemble:
 			f_args = []
 		return func(self.adj_matrix, *f_args)
 
-	def predict_std(self, func_grad, f_args=None, batch_size=None):
+	def predict_std(self, func_grad, f_args=None, obs_dim_idx=None, batch_size=None):
 		if f_args is None:
 			f_args = []
 		if batch_size is None:
-			grad_term = func_grad(self.adj_matrix, *f_args)
-			return np.sqrt(((self.sigma * grad_term) ** 2).sum())
+			if obs_dim_idx is None:
+				grad_term = func_grad(self.adj_matrix, *f_args)
+				return np.sqrt(((self.sigma * grad_term) ** 2).sum())
+			else:
+				grad_term = func_grad(self.adj_matrix, *f_args)
+				sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
+				return np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
 		else:
 			std_vec = np.zeros(self.N)
 			for b in trange(int(self.N / batch_size)):
 				bslice = slice(b*batch_size,(b+1)*batch_size)
 				grad_term = func_grad(self.adj_matrix, *f_args, bslice=bslice)
-				std_vec[bslice] = np.sqrt(((self.sigma[...,None] * grad_term) ** 2).sum(axis=[0,1]))
+				std_vec[bslice] = np.sqrt(((self.sigma[...,None] * grad_term) ** 2).sum(axis=(0,1)))
 			return std_vec
 
 	def predict_zscore(self, value, func, func_grad, f_args=None, f_grad_args=None):
@@ -91,9 +96,11 @@ class GraphEnsemble:
 			errors = np.concatenate([errors, c.eval_ml_eqs(adj, self)])
 		return errors
 
-	def eval_theta(self, method='anderson', opt_kwargs=None):
+	def eval_theta(self, method='anderson', opt_kwargs=None, theta0=None):
+		if theta0 is None:
+			theta0 = np.ones(self.N_theta)
 		return opt.root(self.eval_ml_eqs,
-						x0=np.ones(self.N_theta),
+						x0=theta0,
 						method=method,
 						options=opt_kwargs
 						).x
