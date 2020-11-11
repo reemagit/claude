@@ -25,8 +25,8 @@ class DegreeSequence(Constraint):
 			self.nodeset = np.asarray(self.nodeset).astype(int)
 		self.bg_nodeset = subgraph_nodeset
 		if self.bg_nodeset is not None:
-			if not np.all(np.in1d(self.nodeset,self.bg_nodeset)):
-				raise ValueError('Selected nodeset is not fully contained in subgraph nodeset')
+			#if not np.all(np.in1d(self.nodeset,self.bg_nodeset)):
+			#	raise ValueError('Selected nodeset is not fully contained in subgraph nodeset')
 			self.bg_nodeset = np.asarray(self.bg_nodeset).astype(int)
 
 	def coupling_matrix(self, theta, gens):
@@ -49,12 +49,6 @@ class DegreeSequence(Constraint):
 			raise ValueError('Cannot impose a DegreeSequence constraint on an undirected GraphEnsemble object. '
 							 'Use OutDegreeSequence and InDegreeSequence constraints instead.')
 		return obs.DegreeSequence.func(adj_matrix, self.nodeset, self.bg_nodeset) - self.c_vals
-		'''if self.nodeset is None:
-			return adj_matrix.sum(axis=1) - self.c_vals
-		elif self.bg_nodeset is None:
-			return adj_matrix[self.nodeset,:].sum(axis=1) - self.c_vals
-		else:
-			return adj_matrix[self.nodeset[:,None], self.bg_nodeset].sum(axis=1) - self.c_vals'''
 
 class OutDegreeSequence(DegreeSequence):
 
@@ -70,12 +64,13 @@ class OutDegreeSequence(DegreeSequence):
 		return np.exp(-c)
 
 	def eval_ml_eqs(self, adj_matrix, gens):
-		if self.nodeset is None:
-			return adj_matrix.sum(axis=1) - self.c_vals
-		elif self.bg_nodeset is None:
-			return adj_matrix[self.nodeset, :].sum(axis=1) - self.c_vals
-		else:
-			return adj_matrix[self.nodeset[:, None], self.bg_nodeset].sum(axis=1) - self.c_vals
+		return obs.OutDegreeSequence.func(adj_matrix, self.nodeset, self.bg_nodeset) - self.c_vals
+		#if self.nodeset is None:
+		#	return adj_matrix.sum(axis=1) - self.c_vals
+		#elif self.bg_nodeset is None:
+		#	return adj_matrix[self.nodeset, :].sum(axis=1) - self.c_vals
+		#else:
+		#	return adj_matrix[self.nodeset[:, None], self.bg_nodeset].sum(axis=1) - self.c_vals
 
 class InDegreeSequence(DegreeSequence):
 
@@ -91,12 +86,39 @@ class InDegreeSequence(DegreeSequence):
 		return np.exp(-c)
 
 	def eval_ml_eqs(self, adj_matrix, gens):
+		return obs.InDegreeSequence.func(adj_matrix, self.nodeset, self.bg_nodeset) - self.c_vals
+		#if self.nodeset is None:
+		#	return adj_matrix.sum(axis=0) - self.c_vals
+		#elif self.bg_nodeset is None:
+		#	return adj_matrix[:, self.nodeset].sum(axis=0) - self.c_vals
+		#else:
+		#	return adj_matrix[self.bg_nodeset[:, None], self.nodeset].sum(axis=0) - self.c_vals
+
+class BipartiteOutDegreeSequence(OutDegreeSequence):
+
+	def coupling_matrix(self, theta, gens):
 		if self.nodeset is None:
-			return adj_matrix.sum(axis=0) - self.c_vals
+			c = theta[:, None] * np.ones([gens.N1,gens.N2])
 		elif self.bg_nodeset is None:
-			return adj_matrix[:, self.nodeset].sum(axis=0) - self.c_vals
+			c = np.zeros([gens.N1, gens.N2])
+			c[self.nodeset, :] = theta[:,None]
 		else:
-			return adj_matrix[self.bg_nodeset[:, None], self.nodeset].sum(axis=0) - self.c_vals
+			c = np.zeros([gens.N1, gens.N2])
+			c[self.nodeset[:,None], self.bg_nodeset] = theta[:, None]
+		return np.exp(-c)
+
+class BipartiteInDegreeSequence(InDegreeSequence):
+
+	def coupling_matrix(self, theta, gens):
+		if self.nodeset is None:
+			c = theta[None, :] * np.ones([gens.N1,gens.N2])
+		elif self.bg_nodeset is None:
+			c = np.zeros([gens.N1, gens.N2])
+			c[:, self.nodeset] = theta[None,:]
+		else:
+			c = np.zeros([gens.N1, gens.N2])
+			c[self.bg_nodeset[:,None], self.nodeset] = theta[None, :]
+		return np.exp(-c)
 
 class Connectivity(Constraint):
 	def __init__(self, n_edges, nodeset1=None, nodeset2=None):

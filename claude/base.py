@@ -6,6 +6,13 @@ from tqdm.auto import trange
 def has_method(o, name):
     return callable(getattr(o, name, None))
 
+def save_ensemble(ge, filepath):
+	ge.save(filepath)
+
+def load_ensemble(filepath):
+	import pickle
+	return pickle.load(open(filepath, 'rb'))
+
 class GraphEnsemble:
 	def __init__(self, N_nodes, directed=False, self_loops=False):
 		self.N = N_nodes
@@ -132,7 +139,77 @@ class GraphEnsemble:
 	def check_constraint_deviations(self, c_idx):
 		return self.constraints[c_idx].eval_ml_eqs(self.adj_matrix, self)
 
+	def get_graph_dims(self):
+		return np.array([self.N,])
 
+	def save(self, filepath):
+		import pickle
+		pickle.dump(self, open(filepath,'wb'), pickle.HIGHEST_PROTOCOL)
+
+class BipartiteGraphEnsemble(GraphEnsemble):
+	def __init__(self, N1_nodes, N2_nodes):
+		self.N1 = N1_nodes
+		self.N2 = N2_nodes
+		self.fixed_edges = None
+
+	def eval_theta(self, method='anderson', opt_kwargs=None, theta0=None):
+		if theta0 is None:
+			theta0 = np.ones(self.N_theta)
+		return opt.root(self.eval_ml_eqs,
+						x0=theta0,
+						method=method,
+						options=opt_kwargs
+						).x
+
+	def eval_coupling_matrix(self, theta):
+		coupling = np.ones([self.N1, self.N2])
+		for c_idx, c in enumerate(self.constraints):
+			i0, i1 = self.get_multipliers_idx(c_idx)
+			coupling *= c.coupling_matrix(theta[i0:i1], self)
+		return coupling
+
+	def eval_adj_matrix(self, theta): # Fermi-Dirac distribution
+		coupling = self.eval_coupling_matrix(theta)
+		adj_matrix = (coupling / (1 + coupling))
+		if self.fixed_edges is not None:
+			adj_matrix[self.fixed_edges[:,0].astype(int),self.fixed_edges[:,1].astype(int)] = self.fixed_edges[:,2]
+		return adj_matrix
+
+	def eval_sigma(self, theta):
+		coupling = self.eval_coupling_matrix(theta)
+		sigma = np.sqrt(coupling) / (1 + coupling)
+		return sigma
+
+	def predict_std(self, obs, g_args=None, obs_dim_idx=None, batch_size=None, obs_dim=None):
+		if has_method(obs, 'grad'): # obs is of class Observable
+			if hasattr(obs, 'obs_dim_idx'):
+				obs_dim_idx = obs.obs_dim_idx
+			g_args = obs.g_args
+			func_grad = obs.grad
+		else:
+			func_grad = obs
+		if g_args is None:
+			g_args = []
+		if batch_size is None:
+			grad_term = func_grad(self.adj_matrix, *g_args)
+			sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
+			std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
+		else:
+			std_vec = np.zeros(obs_dim)
+			for b in trange(int(obs_dim / batch_size)):
+				bslice = slice(b*batch_size,(b+1)*batch_size)
+				grad_term = func_grad(self.adj_matrix, *g_args, bslice=bslice)
+				std_vec[bslice] = np.sqrt(((self.sigma[...,None] * grad_term) ** 2).sum(axis=(0,1)))
+		if hasattr(obs, 'output_nodeset') and obs.output_nodeset is not None:
+			std_vec = std_vec[obs.output_nodeset]
+		return std_vec
+
+	def sample(self):
+		s = (np.random.rand(self.N1, self.N2) <= self.adj_matrix).astype(int)
+		return s
+
+	def get_graph_dims(self):
+		return np.array([self.N1,self.N2])
 
 class MultiGraphEnsemble(GraphEnsemble):
 
@@ -152,3 +229,20 @@ class MultiGraphEnsemble(GraphEnsemble):
 
 	def sample(self):
 		raise NotImplementedError
+
+class GraphEnsembleChain:
+	def __init__(self, ge_list):
+		if not self.check_consistency(ge_list):
+			raise ValueError('Concatenated graph ensembles do not have compatible dimensions')
+		self.ge_list = ge_list
+
+	def predict_mean_list(self, obs_list, f_args_list):
+		return [self.ge_list[i].predict_mean(obs_list[i], f_args_list[i]) for i in range(len(self.ge_list))]
+
+	def check_consistency(self, ge_list):
+		for i in range(len(ge_list)-1):
+			ge1 = ge_list[i]
+			ge2 = ge_list[i]
+			if ge1.get_graph_dims()[0] != ge2.get_graph_dims()[-1]:
+				return False
+		return True

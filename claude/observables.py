@@ -94,6 +94,40 @@ class DegreeSequence(Observable):
 			mask[nodeset[:, None], subgraph_nodeset] = 1.
 			return mask
 
+class OutDegreeSequence(DegreeSequence):
+	obs_dim_idx = 0
+
+class InDegreeSequence(DegreeSequence):
+	obs_dim_idx = 1
+
+	@staticmethod
+	def func(adj, nodeset=None, subgraph_nodeset=None):
+		if nodeset is None:
+			return adj.sum(axis=0)
+		elif subgraph_nodeset is None:
+			nodeset = np.asarray(nodeset)
+			return adj[:, nodeset].sum(axis=0)
+		else:
+			nodeset = np.asarray(nodeset)
+			subgraph_nodeset = np.asarray(subgraph_nodeset)
+			return adj[subgraph_nodeset[:,None], nodeset].sum(axis=0)
+
+	@staticmethod
+	def grad(adj, nodeset=None, subgraph_nodeset=None):
+		if nodeset is None:
+			return np.ones(adj.shape)
+		elif subgraph_nodeset is None:
+			nodeset = np.asarray(nodeset)
+			mask = np.zeros(adj.shape)
+			mask[nodeset[:, None], nodeset] = 1.
+			return mask
+		else:
+			nodeset = np.asarray(nodeset)
+			subgraph_nodeset = np.asarray(subgraph_nodeset)
+			mask = np.zeros(adj.shape)
+			mask[subgraph_nodeset[:,None], nodeset] = 1.
+			return mask
+
 class RandomWalkWithRestart(Observable):
 	obs_dim_idx = 1
 
