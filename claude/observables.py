@@ -1,8 +1,11 @@
 import numpy as np
 from tqdm import tqdm, trange
 
+class Observable:
+	f_args = None
+	g_args = None
 
-class AverageNeighborDegree:
+class AverageNeighborDegree(Observable):
 	@staticmethod
 	def func(adj, bslice=None):
 		if bslice is None:
@@ -11,7 +14,94 @@ class AverageNeighborDegree:
 			return adj[bslice,:].dot(adj).sum() / adj[bslice,:].sum()
 
 
-class RandomWalkWithRestart:
+class Connectivity(Observable):
+	def __init__(self, nodeset1=None, nodeset2=None, directed=False):
+		self.f_args = [nodeset1, nodeset2, directed]
+		self.g_args = [nodeset1, nodeset2]
+		self.directed = directed
+
+	@staticmethod
+	def func(adj, nodeset1=None, nodeset2=None, directed=False):
+		if nodeset1 is None:
+			if directed:
+				return adj.sum()
+			else:
+				return np.triu(adj).sum()
+		elif nodeset2 is None:
+			nodeset1 = np.asarray(nodeset1)
+			if directed:
+				return adj[nodeset1[:,None], nodeset1].sum()
+			else:
+				return np.triu(adj)[nodeset1[:,None], nodeset1].sum()
+		else:
+			nodeset1 = np.asarray(nodeset1)
+			nodeset2 = np.asarray(nodeset2)
+			if directed:
+				return adj[nodeset1[:,None], nodeset2].sum()
+			else:
+				return adj[np.minimum(nodeset1[:, None], nodeset2), np.maximum(nodeset1[:, None], nodeset2)].sum()
+
+
+	@staticmethod
+	def grad(adj, nodeset1=None, nodeset2=None):
+		if nodeset1 is None:
+			return np.triu(np.ones(adj.shape))
+		elif nodeset2 is None:
+			nodeset1 = np.asarray(nodeset1)
+			mask = np.zeros(adj.shape)
+			mask[nodeset1[:,None],nodeset1] = 1.
+			return np.triu(mask)
+		else:
+			nodeset1 = np.asarray(nodeset1)
+			nodeset2 = np.asarray(nodeset2)
+			mask = np.zeros(adj.shape)
+			mask[np.minimum(nodeset1[:, None], nodeset2), np.maximum(nodeset1[:, None], nodeset2)] = 1.
+			return mask
+
+class DegreeSequence(Observable):
+	obs_dim_idx = 0
+
+	def __init__(self, nodeset=None, subgraph_nodeset=None):
+		self.output_nodeset = nodeset
+		self.f_args = [nodeset, subgraph_nodeset]
+		self.g_args = [nodeset, subgraph_nodeset]
+
+	@staticmethod
+	def func(adj, nodeset=None, subgraph_nodeset=None):
+		if nodeset is None:
+			return adj.sum(axis=1)
+		elif subgraph_nodeset is None:
+			nodeset = np.asarray(nodeset)
+			return adj[nodeset,:].sum(axis=1)
+		else:
+			nodeset = np.asarray(nodeset)
+			subgraph_nodeset = np.asarray(subgraph_nodeset)
+			return adj[nodeset[:,None], subgraph_nodeset].sum(axis=1)
+
+	@staticmethod
+	def grad(adj, nodeset=None, subgraph_nodeset=None):
+		if nodeset is None:
+			return np.ones(adj.shape)
+		elif subgraph_nodeset is None:
+			nodeset = np.asarray(nodeset)
+			mask = np.zeros(adj.shape)
+			mask[nodeset[:,None],nodeset] = 1.
+			return mask
+		else:
+			nodeset = np.asarray(nodeset)
+			subgraph_nodeset = np.asarray(subgraph_nodeset)
+			mask = np.zeros(adj.shape)
+			mask[nodeset[:, None], subgraph_nodeset] = 1.
+			return mask
+
+class RandomWalkWithRestart(Observable):
+	obs_dim_idx = 1
+
+	def __init__(self,x,lambd,mode='iterative',precomputed_kernel=None,output_nodeset=None):
+		self.f_args = [x,lambd,mode,precomputed_kernel]
+		self.g_args = self.f_args
+		self.output_nodeset=output_nodeset
+
 	@staticmethod
 	def func(adj,x,lambd,mode='iterative',precomputed_kernel=None):
 		if precomputed_kernel is None:
@@ -19,7 +109,6 @@ class RandomWalkWithRestart:
 				return RandomWalkWithRestart.eval_iterative(adj,x,lambd)
 			elif mode == 'exact':
 				return RandomWalkWithRestart.eval_exact(adj,x,lambd)
-				print(tm)
 			elif mode == 'slice':
 				raise NotImplementedError()
 				#import jax.numpy as jnp

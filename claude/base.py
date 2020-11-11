@@ -3,7 +3,8 @@ import numpy as np
 import scipy.optimize as opt
 from tqdm.auto import trange
 
-
+def has_method(o, name):
+    return callable(getattr(o, name, None))
 
 class GraphEnsemble:
 	def __init__(self, N_nodes, directed=False, self_loops=False):
@@ -19,33 +20,51 @@ class GraphEnsemble:
 		self.adj_matrix = self.eval_adj_matrix(self.theta)
 		self.sigma = self.eval_sigma(self.theta)
 
-	def predict_mean(self, func, f_args=None):
+	def predict_mean(self, obs, f_args=None):
+		if has_method(obs, 'func'): # obs is of class Observable
+			func = obs.func
+			f_args = obs.f_args
+		else:
+			func = obs
 		if f_args is None:
 			f_args = []
 		return func(self.adj_matrix, *f_args)
 
-	def predict_std(self, func_grad, f_args=None, obs_dim_idx=None, batch_size=None):
-		if f_args is None:
-			f_args = []
+	def predict_std(self, obs, g_args=None, obs_dim_idx=None, batch_size=None):
+		if has_method(obs, 'grad'): # obs is of class Observable
+			if hasattr(obs, 'obs_dim_idx'):
+				obs_dim_idx = obs.obs_dim_idx
+			g_args = obs.g_args
+			func_grad = obs.grad
+		else:
+			func_grad = obs
+		if g_args is None:
+			g_args = []
 		if batch_size is None:
-			if obs_dim_idx is None:
-				grad_term = func_grad(self.adj_matrix, *f_args)
-				return np.sqrt(((self.sigma * grad_term) ** 2).sum())
-			else:
-				grad_term = func_grad(self.adj_matrix, *f_args)
-				sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
-				return np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
+			#if obs_dim_idx is None:
+			#	grad_term = func_grad(self.adj_matrix, *f_args)
+			#	std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum())
+			#else:
+			grad_term = func_grad(self.adj_matrix, *g_args)
+			sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
+			std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
 		else:
 			std_vec = np.zeros(self.N)
 			for b in trange(int(self.N / batch_size)):
 				bslice = slice(b*batch_size,(b+1)*batch_size)
-				grad_term = func_grad(self.adj_matrix, *f_args, bslice=bslice)
+				grad_term = func_grad(self.adj_matrix, *g_args, bslice=bslice)
 				std_vec[bslice] = np.sqrt(((self.sigma[...,None] * grad_term) ** 2).sum(axis=(0,1)))
-			return std_vec
+		if hasattr(obs, 'output_nodeset') and obs.output_nodeset is not None:
+			std_vec = std_vec[obs.output_nodeset]
+		return std_vec
 
-	def predict_zscore(self, value, func, func_grad, f_args=None, f_grad_args=None):
-		mu = self.predict_mean(func, f_args=f_args)
-		sigma = self.predict_std(func_grad, f_grad_args=f_grad_args)
+	def predict_zscore(self, value, obs, obs_grad=None, f_args=None, g_args=None, batch_size=None):
+		if has_method(obs, 'func') and has_method(obs, 'grad'): # obs is of class Observable
+			mu = self.predict_mean(obs)
+			sigma = self.predict_std(obs, batch_size=batch_size)
+		else:
+			mu = self.predict_mean(obs, f_args=f_args)
+			sigma = self.predict_std(obs_grad, g_args=g_args, batch_size=batch_size)
 		return (value-mu)/sigma
 
 	def fix_edges_value(self, edgelist, values):
