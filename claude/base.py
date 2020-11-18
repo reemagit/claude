@@ -2,6 +2,7 @@
 import numpy as np
 import scipy.optimize as opt
 from tqdm.auto import trange
+from scipy import sparse as sp
 
 def has_method(o, name):
     return callable(getattr(o, name, None))
@@ -37,7 +38,7 @@ class GraphEnsemble:
 			f_args = []
 		return func(self.adj_matrix, *f_args)
 
-	def predict_std(self, obs, g_args=None, obs_dim_idx=None, batch_size=None):
+	def predict_std(self, obs, g_args=None, obs_dim_idx=None, batch_size=None, sparse=False):
 		if has_method(obs, 'grad'): # obs is of class Observable
 			if hasattr(obs, 'obs_dim_idx'):
 				obs_dim_idx = obs.obs_dim_idx
@@ -48,14 +49,18 @@ class GraphEnsemble:
 		if g_args is None:
 			g_args = []
 		if batch_size is None:
-			#if obs_dim_idx is None:
-			#	grad_term = func_grad(self.adj_matrix, *f_args)
-			#	std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum())
-			#else:
-			grad_term = func_grad(self.adj_matrix, *g_args)
-			sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
-			std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
+			grad_term = func_grad(self.adj_matrix, *g_args, sparse=sparse)
+			if sparse:
+				sum_dims = None if obs_dim_idx is None else 1-obs_dim_idx # scipy sparse does not support tuple axes
+				std_vec = np.squeeze(np.asarray(np.sqrt((grad_term.multiply(self.sigma) ** 2).sum(axis=sum_dims))))
+				if obs_dim_idx is None:
+					std_vec = std_vec.item() # sparse returns a numpy scalar, so convert to float
+			else:
+				sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
+				std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
 		else:
+			if sparse:
+				raise NotImplementedError('Sparse mode with batch_size calculation not implemented yet')
 			std_vec = np.zeros(self.N)
 			for b in trange(int(self.N / batch_size)):
 				bslice = slice(b*batch_size,(b+1)*batch_size)
@@ -140,7 +145,7 @@ class GraphEnsemble:
 		return self.constraints[c_idx].eval_ml_eqs(self.adj_matrix, self)
 
 	def get_graph_dims(self):
-		return np.array([self.N,])
+		return np.array([self.N,self.N])
 
 	def save(self, filepath):
 		import pickle
@@ -230,19 +235,53 @@ class MultiGraphEnsemble(GraphEnsemble):
 	def sample(self):
 		raise NotImplementedError
 
-class GraphEnsembleChain:
-	def __init__(self, ge_list):
-		if not self.check_consistency(ge_list):
-			raise ValueError('Concatenated graph ensembles do not have compatible dimensions')
+class GraphEnsembleSet:
+	def __init__(self, ge_list, nid_pair_list):
+		if not self.check_consistency(ge_list, nid_pair_list):
+			raise ValueError('Node ids are not associated to consistent GraphEnsemble dimensions')
 		self.ge_list = ge_list
+		self.nid_pair_list = nid_pair_list
+		self.nidpair2geid = {(nid_pair_list[i][0],nid_pair_list[i][1]):i for i in range(len(ge_list))}
+
+	def __getitem__(self, nid_pair):
+		nid1,nid2 = nid_pair
+		return self.ge_list[self.nidpair2geid[(nid1,nid2)]]
+
+	def fit(self, constraints_list, method='anderson', opt_kwargs=None, theta0=None):
+		if isinstance(method, str):
+			method = [method for i in range(len(self.ge_list))]
+		if isinstance(opt_kwargs, dict):
+			opt_kwargs = [opt_kwargs for i in range(len(self.ge_list))]
+		if not isinstance(theta0, list):
+			theta0 = [theta0 for i in range(len(self.ge_list))]
+
+		for i in range(len(self.ge_list)):
+			self.ge_list[i].fit(constraints_list[i], method=method[i], opt_kwargs=opt_kwargs[i], theta0=theta0[i])
+
+	def predict_mean(self, obs):
+		adj_list = [self.ge_list.adj_matrix[i] for i in range(len(self.ge_list))]
+		return obs.func(adj_list)
+
+	def predict_std(self, obs):
+		adj_list = [self.ge_list.adj_matrix[i] for i in range(len(self.ge_list))]
+		grad_term = func_grad(self.adj_matrix, *g_args)
+		sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
+		std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
+		return obs.grad(adj_list)
+
 
 	def predict_mean_list(self, obs_list, f_args_list):
 		return [self.ge_list[i].predict_mean(obs_list[i], f_args_list[i]) for i in range(len(self.ge_list))]
 
-	def check_consistency(self, ge_list):
-		for i in range(len(ge_list)-1):
-			ge1 = ge_list[i]
-			ge2 = ge_list[i]
-			if ge1.get_graph_dims()[0] != ge2.get_graph_dims()[-1]:
-				return False
+	def check_consistency(self, ge_list, nid_pair_list):
+		nid2dim = {}
+		for i,(nid1,nid2) in enumerate(nid_pair_list):
+			ge = ge_list[i]
+			for j,nid in enumerate([nid1,nid2]):
+				if nid not in nid2dim:
+					nid2dim[nid] = ge.get_graph_dims()[j]
+				else:
+					if nid2dim[nid] != ge.get_graph_dims()[j]:
+						return False
 		return True
+

@@ -1,5 +1,7 @@
 import numpy as np
 from tqdm import tqdm, trange
+from scipy import sparse as sp
+import warnings
 
 class Observable:
 	f_args = None
@@ -15,7 +17,7 @@ class AverageNeighborDegree(Observable):
 
 
 class Connectivity(Observable):
-	def __init__(self, nodeset1=None, nodeset2=None, directed=False):
+	def __init__(self, nodeset1=None, nodeset2=None, directed=False, sparse=False):
 		self.f_args = [nodeset1, nodeset2, directed]
 		self.g_args = [nodeset1, nodeset2]
 		self.directed = directed
@@ -32,7 +34,7 @@ class Connectivity(Observable):
 			if directed:
 				return adj[nodeset1[:,None], nodeset1].sum()
 			else:
-				return np.triu(adj)[nodeset1[:,None], nodeset1].sum()
+				return np.triu(adj[nodeset1[:,None], nodeset1]).sum()
 		else:
 			nodeset1 = np.asarray(nodeset1)
 			nodeset2 = np.asarray(nodeset2)
@@ -43,18 +45,28 @@ class Connectivity(Observable):
 
 
 	@staticmethod
-	def grad(adj, nodeset1=None, nodeset2=None):
+	def grad(adj, nodeset1=None, nodeset2=None, sparse=False):
 		if nodeset1 is None:
 			return np.triu(np.ones(adj.shape))
 		elif nodeset2 is None:
 			nodeset1 = np.asarray(nodeset1)
-			mask = np.zeros(adj.shape)
-			mask[nodeset1[:,None],nodeset1] = 1.
-			return np.triu(mask)
+			if sparse:
+				mask = sp.csr_matrix(adj.shape)
+				triu_func = sp.triu
+			else:
+				mask = np.zeros(adj.shape)
+				triu_func = np.triu
+			with warnings.catch_warnings():
+				warnings.simplefilter("ignore")
+				mask[nodeset1[:,None],nodeset1] = 1.
+			return triu_func(mask)
 		else:
 			nodeset1 = np.asarray(nodeset1)
 			nodeset2 = np.asarray(nodeset2)
-			mask = np.zeros(adj.shape)
+			if sparse:
+				mask = sp.csr_matrix(adj.shape)
+			else:
+				mask = np.zeros(adj.shape)
 			mask[np.minimum(nodeset1[:, None], nodeset2), np.maximum(nodeset1[:, None], nodeset2)] = 1.
 			return mask
 
@@ -197,3 +209,68 @@ class RandomWalkWithRestart(Observable):
 				break
 		return np.reshape(vt.toarray(), x.shape)
 
+class SumOfPaths:
+	input_variable_index=0
+	link_variable_index=1
+
+	def __init__(self, input_vector, proj_vector=None, length=1):
+		self.f_args = [input_vector, proj_vector, length]
+		self.g_args = [input_vector, proj_vector, length]
+
+	def func(self, adj, input_vector, proj_vector=None, length=1):
+		o = input_vector
+		for i in range(length):
+			o = o.dot(adj)
+		if proj_vector is None:
+			return o
+		else:
+			return (o*proj_vector).sum()
+
+	def grad(self, adj, input_vector, proj_vector, length=1):
+		powers = []
+		for l in range(length + 1):
+			powers.append(np.linalg.matrix_power(adj, l))
+		term = 0
+		for l in range(length):
+			term = term + input_vector.dot(powers[l])[:,None] * powers[length - 1 - l].dot(proj_vector)[None, :]
+		return term
+
+class CompoundObservable:
+	def __init__(self, obs_list, nid_pair_list, reduce_func='multiply', link_variable_index=0):
+		self.obs_list = obs_list
+		self.nid_pair_list = nid_pair_list
+		self.reduce_func = reduce_func
+		if isinstance(link_variable_index,int):
+			self.link_variable_index = [link_variable_index for _ in range(len(obs_list)-1)]
+		else:
+			self.link_variable_index = link_variable_index
+
+	def func(self, adj_list):
+		if self.reduce_func == 'multiply':
+			obs_value = self[0].f_args[self[0].input_variable_index[0]]
+			for i in range(len(adj_list)):
+				f_args = list(self[i].f_args)
+				f_args[self.input_variable_index[i]] = obs_value
+				obs_value = self[i].func(adj_list[i], f_args)
+		elif self.reduce_func == 'sum':
+			obs_value = self[0].func(adj_list[0], *self[0].f_args)
+			for i in range(1,len(adj_list)):
+				obs_value = obs_value + self[i].func(adj_list[i], self[i].f_args)
+		else:
+			raise ValueError('Invalid value for parameter reduce_func: possible choices are either \'multiply\' or \'sum\'')
+		return obs_value
+
+	def grad(self, adj_list, term_num):
+		if self.reduce_func == 'multiply':
+			grad_value = self[0].f_args[self[0].input_variable_index[0]]
+			for i in range(len(adj_list)):
+				g_args = list(self[i].g_args)
+				g_args[self.input_variable_index[i]] = grad_value
+				if i == term_num:
+					grad_value = self[i].grad(adj_list[i], g_args)
+				else:
+					grad_value = self[i].func(adj_list[i], g_args)
+		return grad_value
+
+	def __getitem__(self, obs_id):
+		return self.obs_list[obs_id]
