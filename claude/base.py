@@ -17,6 +17,8 @@ def load_ensemble(filepath):
 class GraphEnsemble:
 	def __init__(self, N_nodes, directed=False, self_loops=False):
 		self.N = N_nodes
+		self.N1 = N_nodes
+		self.N2 = N_nodes
 		self.self_loops = self_loops
 		self.directed = directed
 		self.fixed_edges = None
@@ -38,7 +40,7 @@ class GraphEnsemble:
 			f_args = []
 		return func(self.adj_matrix, *f_args)
 
-	def predict_std(self, obs, g_args=None, obs_dim_idx=None, batch_size=None, sparse=False):
+	def predict_std(self, obs, g_args=None, obs_dim_idx=None, slice_param=None, batch_size=None):
 		if has_method(obs, 'grad'): # obs is of class Observable
 			if hasattr(obs, 'obs_dim_idx'):
 				obs_dim_idx = obs.obs_dim_idx
@@ -49,8 +51,8 @@ class GraphEnsemble:
 		if g_args is None:
 			g_args = []
 		if batch_size is None:
-			grad_term = func_grad(self.adj_matrix, *g_args, sparse=sparse)
-			if sparse:
+			grad_term = func_grad(self.adj_matrix, *g_args)
+			if obs.sparse:
 				sum_dims = None if obs_dim_idx is None else 1-obs_dim_idx # scipy sparse does not support tuple axes
 				std_vec = np.squeeze(np.asarray(np.sqrt((grad_term.multiply(self.sigma) ** 2).sum(axis=sum_dims))))
 				if obs_dim_idx is None:
@@ -59,15 +61,14 @@ class GraphEnsemble:
 				sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
 				std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
 		else:
-			if sparse:
+			if obs.sparse:
 				raise NotImplementedError('Sparse mode with batch_size calculation not implemented yet')
-			std_vec = np.zeros(self.N)
-			for b in trange(int(self.N / batch_size)):
+			slice_param = obs.slice_param
+			std_vec = np.zeros(obs.obs_dim)
+			for b in trange(int(obs.obs_dim / batch_size)):
 				bslice = slice(b*batch_size,(b+1)*batch_size)
-				grad_term = func_grad(self.adj_matrix, *g_args, bslice=bslice)
+				grad_term = func_grad(self.adj_matrix, *g_args, {slice_param:bslice})
 				std_vec[bslice] = np.sqrt(((self.sigma[...,None] * grad_term) ** 2).sum(axis=(0,1)))
-		if hasattr(obs, 'output_nodeset') and obs.output_nodeset is not None:
-			std_vec = std_vec[obs.output_nodeset]
 		return std_vec
 
 	def predict_zscore(self, value, obs, obs_grad=None, f_args=None, g_args=None, batch_size=None):
@@ -247,6 +248,9 @@ class GraphEnsembleSet:
 		nid1,nid2 = nid_pair
 		return self.ge_list[self.nidpair2geid[(nid1,nid2)]]
 
+	def __len__(self):
+		return len(self.ge_list)
+
 	def fit(self, constraints_list, method='anderson', opt_kwargs=None, theta0=None):
 		if isinstance(method, str):
 			method = [method for i in range(len(self.ge_list))]
@@ -259,15 +263,16 @@ class GraphEnsembleSet:
 			self.ge_list[i].fit(constraints_list[i], method=method[i], opt_kwargs=opt_kwargs[i], theta0=theta0[i])
 
 	def predict_mean(self, obs):
-		adj_list = [self.ge_list.adj_matrix[i] for i in range(len(self.ge_list))]
+		adj_list = [self[obs.nid_pair_list[i]].adj_matrix for i in range(len(obs))]
 		return obs.func(adj_list)
 
 	def predict_std(self, obs):
-		adj_list = [self.ge_list.adj_matrix[i] for i in range(len(self.ge_list))]
-		grad_term = func_grad(self.adj_matrix, *g_args)
-		sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
-		std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
-		return obs.grad(adj_list)
+		adj_list = [self[obs.nid_pair_list[i]].adj_matrix for i in range(len(obs))]
+		std = 0
+		for i in range(len(obs)):
+			grad_term = obs.grad(adj_list, term_num=i)
+			std = std + ((self[obs.nid_pair_list[i]].sigma * grad_term) ** 2).sum()
+		return np.sqrt(std)
 
 
 	def predict_mean_list(self, obs_list, f_args_list):

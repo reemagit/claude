@@ -6,14 +6,23 @@ import warnings
 class Observable:
 	f_args = None
 	g_args = None
+	sparse = False
 
 class AverageNeighborDegree(Observable):
+	slice_param = 'output_nodeset'
+
+	def __init__(self,output_nodeset=None):
+		self.f_args = []
+		self.g_args = []
+		self.output_nodeset=output_nodeset
+		self.obs_dim = len(output_nodeset)
+
 	@staticmethod
-	def func(adj, bslice=None):
-		if bslice is None:
+	def func(adj, output_nodeset=None):
+		if output_nodeset is None:
 			return adj.dot(adj).sum(axis=1) / adj.sum(axis=1)
 		else:
-			return adj[bslice,:].dot(adj).sum() / adj[bslice,:].sum()
+			return adj[output_nodeset,:].dot(adj).sum() / adj[output_nodeset,:].sum()
 
 
 class Connectivity(Observable):
@@ -21,6 +30,7 @@ class Connectivity(Observable):
 		self.f_args = [nodeset1, nodeset2, directed]
 		self.g_args = [nodeset1, nodeset2]
 		self.directed = directed
+		self.sparse = sparse
 
 	@staticmethod
 	def func(adj, nodeset1=None, nodeset2=None, directed=False):
@@ -72,6 +82,7 @@ class Connectivity(Observable):
 
 class DegreeSequence(Observable):
 	obs_dim_idx = 0
+	slice_param = 'output_nodeset'
 
 	def __init__(self, nodeset=None, subgraph_nodeset=None):
 		self.output_nodeset = nodeset
@@ -108,9 +119,11 @@ class DegreeSequence(Observable):
 
 class OutDegreeSequence(DegreeSequence):
 	obs_dim_idx = 0
+	slice_param = 'output_nodeset'
 
 class InDegreeSequence(DegreeSequence):
 	obs_dim_idx = 1
+	slice_param = 'output_nodeset'
 
 	@staticmethod
 	def func(adj, nodeset=None, subgraph_nodeset=None):
@@ -142,19 +155,21 @@ class InDegreeSequence(DegreeSequence):
 
 class RandomWalkWithRestart(Observable):
 	obs_dim_idx = 1
+	slice_param = 'output_nodeset'
 
 	def __init__(self,x,lambd,mode='iterative',precomputed_kernel=None,output_nodeset=None):
 		self.f_args = [x,lambd,mode,precomputed_kernel]
 		self.g_args = self.f_args
 		self.output_nodeset=output_nodeset
+		self.obs_dim = len(output_nodeset)
 
 	@staticmethod
-	def func(adj,x,lambd,mode='iterative',precomputed_kernel=None):
+	def func(adj,x,lambd,mode='iterative',precomputed_kernel=None,output_nodeset=None):
 		if precomputed_kernel is None:
 			if mode == 'iterative':
-				return RandomWalkWithRestart.eval_iterative(adj,x,lambd)
+				y = RandomWalkWithRestart.eval_iterative(adj,x,lambd)
 			elif mode == 'exact':
-				return RandomWalkWithRestart.eval_exact(adj,x,lambd)
+				y = RandomWalkWithRestart.eval_exact(adj,x,lambd)
 			elif mode == 'slice':
 				raise NotImplementedError()
 				#import jax.numpy as jnp
@@ -167,14 +182,20 @@ class RandomWalkWithRestart(Observable):
 				raise ValueError('The value of the mode parameter can only be "iterative", or "exact"')
 		else:
 			tm = precomputed_kernel
-			return x.dot(tm)
+			y = x.dot(tm)
+		if output_nodeset is not None:
+			y = y[output_nodeset]
+		return y
+
 
 
 	@staticmethod
-	def grad(adj,x,lambd,mode='iterative',precomputed_kernel=None):
+	def grad(adj,x,lambd,mode='iterative',precomputed_kernel=None, output_nodeset=None):
 		dinv = 1/adj.sum(axis=1)
 		omega = RandomWalkWithRestart.func(adj=adj,x=x,lambd=lambd,mode=mode,precomputed_kernel=precomputed_kernel)
 		gradval = (1 - lambd) * dinv[:, None] * omega[:, None]
+		if output_nodeset is not None:
+			gradval = gradval[output_nodeset]
 		return gradval
 
 	@staticmethod
@@ -184,7 +205,6 @@ class RandomWalkWithRestart(Observable):
 
 	@staticmethod
 	def eval_transfer_matrix(adj, lambd):
-		#import jax.numpy as jnp
 		p = adj / np.reshape(adj.sum(axis=0), [adj.shape[0], 1])
 		I = np.eye(p.shape[0])
 		return lambd*np.linalg.inv(I - (1 - lambd) * p)
@@ -211,9 +231,10 @@ class RandomWalkWithRestart(Observable):
 
 class SumOfPaths:
 	input_variable_index=0
-	link_variable_index=1
+	output_variable_index=1
+	sparse = False
 
-	def __init__(self, input_vector, proj_vector=None, length=1):
+	def __init__(self, input_vector=None, proj_vector=None, length=1):
 		self.f_args = [input_vector, proj_vector, length]
 		self.g_args = [input_vector, proj_vector, length]
 
@@ -226,32 +247,44 @@ class SumOfPaths:
 		else:
 			return (o*proj_vector).sum()
 
-	def grad(self, adj, input_vector, proj_vector, length=1):
-		powers = []
-		for l in range(length + 1):
-			powers.append(np.linalg.matrix_power(adj, l))
-		term = 0
-		for l in range(length):
-			term = term + input_vector.dot(powers[l])[:,None] * powers[length - 1 - l].dot(proj_vector)[None, :]
+	def grad(self, adj, input_vector, proj_vector=None, length=1):
+		if length == 1: # special case for length=1 to handle rectangular bipartite adjacencies
+			if proj_vector is None:
+				term = input_vector[:, None]
+			else:
+				term = input_vector[:, None] * proj_vector[None, :]
+		else:
+			powers = []
+			for l in range(length + 1):
+				powers.append(np.linalg.matrix_power(adj, l))
+			term = 0
+			for l in range(length):
+				if proj_vector is None:
+					term = term + input_vector.dot(powers[l])[:, None] * powers[length - 1 - l]
+				else:
+					term = term + input_vector.dot(powers[l])[:,None] * powers[length - 1 - l].dot(proj_vector)[None, :]
 		return term
 
+	def backprop(self, adj, input_vector, proj_vector=None, length=1):
+		return self.func(adj.T, input_vector, proj_vector, length)
+
 class CompoundObservable:
-	def __init__(self, obs_list, nid_pair_list, reduce_func='multiply', link_variable_index=0):
+	def __init__(self, obs_list, nid_pair_list, reduce_func='multiply'):
 		self.obs_list = obs_list
 		self.nid_pair_list = nid_pair_list
 		self.reduce_func = reduce_func
-		if isinstance(link_variable_index,int):
-			self.link_variable_index = [link_variable_index for _ in range(len(obs_list)-1)]
-		else:
-			self.link_variable_index = link_variable_index
+		#if isinstance(link_variable_index,int):
+		#	self.link_variable_index = [link_variable_index for _ in range(len(obs_list)-1)]
+		#else:
+		#	self.link_variable_index = link_variable_index
 
 	def func(self, adj_list):
 		if self.reduce_func == 'multiply':
-			obs_value = self[0].f_args[self[0].input_variable_index[0]]
+			obs_value = self[0].f_args[self[0].input_variable_index]
 			for i in range(len(adj_list)):
 				f_args = list(self[i].f_args)
-				f_args[self.input_variable_index[i]] = obs_value
-				obs_value = self[i].func(adj_list[i], f_args)
+				f_args[self[i].input_variable_index] = obs_value
+				obs_value = self[i].func(adj_list[i], *f_args)
 		elif self.reduce_func == 'sum':
 			obs_value = self[0].func(adj_list[0], *self[0].f_args)
 			for i in range(1,len(adj_list)):
@@ -260,17 +293,31 @@ class CompoundObservable:
 			raise ValueError('Invalid value for parameter reduce_func: possible choices are either \'multiply\' or \'sum\'')
 		return obs_value
 
+	def backprop(self, adj_list):
+		if self.reduce_func == 'multiply':
+			obs_value = self[-1].f_args[self[-1].output_variable_index]
+			for i in range(len(adj_list)):
+				f_args = list(self[i].f_args)
+				f_args[self[-i-1].input_variable_index] = obs_value
+				obs_value = self[-i-1].backprop(adj_list[-i-1], *f_args)
+		elif self.reduce_func == 'sum':
+			raise NotImplementedError
+		else:
+			raise ValueError('Invalid value for parameter reduce_func: possible choices are either \'multiply\' or \'sum\'')
+		return obs_value
+
 	def grad(self, adj_list, term_num):
 		if self.reduce_func == 'multiply':
-			grad_value = self[0].f_args[self[0].input_variable_index[0]]
-			for i in range(len(adj_list)):
-				g_args = list(self[i].g_args)
-				g_args[self.input_variable_index[i]] = grad_value
-				if i == term_num:
-					grad_value = self[i].grad(adj_list[i], g_args)
-				else:
-					grad_value = self[i].func(adj_list[i], g_args)
+			xprime = self.func(adj_list[:term_num]) if term_num > 0 else self[0].f_args[self[0].input_variable_index]
+			yprime = self.backprop(adj_list[term_num+1:]) if term_num < len(self)-1 else self[-1].f_args[self[-1].output_variable_index]
+
+			grad_value = self[term_num].grad(adj_list[term_num],xprime)
+			grad_value = grad_value * yprime[None,:]
+
 		return grad_value
 
 	def __getitem__(self, obs_id):
 		return self.obs_list[obs_id]
+
+	def __len__(self):
+		return len(self.obs_list)
