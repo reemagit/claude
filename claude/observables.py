@@ -229,17 +229,20 @@ class RandomWalkWithRestart(Observable):
 				break
 		return np.reshape(vt.toarray(), x.shape)
 
-class SumOfPaths:
+class Propagation:
 	input_variable_index=0
 	output_variable_index=1
 	sparse = False
 
-	def __init__(self, input_vector=None, proj_vector=None, length=1):
-		self.f_args = [input_vector, proj_vector, length]
-		self.g_args = [input_vector, proj_vector, length]
+	def __init__(self, input_vector=None, proj_vector=None, length=1, normalized=False):
+		self.f_args = [input_vector, proj_vector, length, normalized]
+		self.g_args = [input_vector, proj_vector, length, normalized]
 
-	def func(self, adj, input_vector, proj_vector=None, length=1):
+	@staticmethod
+	def func(adj, input_vector, proj_vector=None, length=1, normalized=False):
 		o = input_vector
+		if normalized:
+			adj = Propagation.get_stochastic(adj)
 		for i in range(length):
 			o = o.dot(adj)
 		if proj_vector is None:
@@ -247,13 +250,18 @@ class SumOfPaths:
 		else:
 			return (o*proj_vector).sum()
 
-	def grad(self, adj, input_vector, proj_vector=None, length=1):
+	@staticmethod
+	def grad(adj, input_vector, proj_vector=None, length=1, normalized=False):
 		if length == 1: # special case for length=1 to handle rectangular bipartite adjacencies
 			if proj_vector is None:
 				term = input_vector[:, None]
 			else:
 				term = input_vector[:, None] * proj_vector[None, :]
+			if normalized:
+				term = term / adj.sum(axis=1)[:,None]
 		else:
+			if normalized:
+				adj = Propagation.get_stochastic(adj)
 			powers = []
 			for l in range(length + 1):
 				powers.append(np.linalg.matrix_power(adj, l))
@@ -265,8 +273,16 @@ class SumOfPaths:
 					term = term + input_vector.dot(powers[l])[:,None] * powers[length - 1 - l].dot(proj_vector)[None, :]
 		return term
 
-	def backprop(self, adj, input_vector, proj_vector=None, length=1):
-		return self.func(adj.T, input_vector, proj_vector, length)
+	@staticmethod
+	def backprop(adj, input_vector, proj_vector=None, length=1, normalized=False):
+		if normalized:
+			adj = Propagation.get_stochastic(adj)
+		return Propagation.func(adj.T, input_vector, proj_vector, length, normalized)
+
+	@staticmethod
+	def get_stochastic(m):
+		d = np.array(m.sum(axis=1)).flatten()
+		return np.asarray(m / d[:, None])
 
 class CompoundObservable:
 	def __init__(self, obs_list, nid_pair_list, reduce_func='multiply'):
