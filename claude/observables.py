@@ -229,7 +229,7 @@ class RandomWalkWithRestart(Observable):
 				break
 		return np.reshape(vt.toarray(), x.shape)
 
-class Propagation:
+class Propagation(Observable):
 	input_variable_index=0
 	output_variable_index=1
 	sparse = False

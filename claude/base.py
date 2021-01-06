@@ -7,12 +7,17 @@ from scipy import sparse as sp
 def has_method(o, name):
     return callable(getattr(o, name, None))
 
-def save_ensemble(ge, filepath):
+def save_ensemble(ge, filepath, save_space=False):
+	ge.adj_matrix=None
+	ge.sigma=None
 	ge.save(filepath)
 
 def load_ensemble(filepath):
 	import pickle
-	return pickle.load(open(filepath, 'rb'))
+	ge = pickle.load(open(filepath, 'rb'))
+	if ge.adj_matrix is None or ge.sigma is None:
+		ge.adj_matrix = ge.eval_adj_matrix(ge.theta)
+		ge.sigma = ge.eval_sigma(ge.theta)
 
 class GraphEnsemble:
 	def __init__(self, N_nodes, directed=False, self_loops=False):
