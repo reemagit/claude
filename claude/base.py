@@ -19,6 +19,7 @@ def load_ensemble(filepath):
 	if ge.adj_matrix is None or ge.sigma is None:
 		ge.adj_matrix = ge.eval_adj_matrix(ge.theta)
 		ge.sigma = ge.eval_sigma(ge.theta)
+	return ge
 
 class GraphEnsemble:
 	def __init__(self, N_nodes, directed=False, self_loops=False):
