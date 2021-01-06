@@ -8,8 +8,9 @@ def has_method(o, name):
     return callable(getattr(o, name, None))
 
 def save_ensemble(ge, filepath, save_space=False):
-	ge.adj_matrix=None
-	ge.sigma=None
+	if save_space:
+		ge.adj_matrix=None
+		ge.sigma=None
 	ge.save(filepath)
 
 def load_ensemble(filepath):
