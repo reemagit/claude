@@ -22,13 +22,14 @@ def load_ensemble(filepath):
 	return ge
 
 class GraphEnsemble:
-	def __init__(self, N_nodes, directed=False, self_loops=False):
+	def __init__(self, N_nodes, directed=False, self_loops=False, nodenames=None):
 		self.N = N_nodes
 		self.N1 = N_nodes
 		self.N2 = N_nodes
 		self.self_loops = self_loops
 		self.directed = directed
 		self.fixed_edges = None
+		self.nodenames = nodenames if nodenames is not None else list(range(N_nodes))
 
 	def fit(self, constraints, method='anderson', opt_kwargs=None, theta0=None):
 		self.N_theta = sum([len(c.c_vals) for c in constraints])

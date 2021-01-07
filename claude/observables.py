@@ -12,6 +12,7 @@ class AverageNeighborDegree(Observable):
 	slice_param = 'output_nodeset'
 
 	def __init__(self,output_nodeset=None):
+		raise NotImplementedError()
 		self.f_args = []
 		self.g_args = []
 		self.output_nodeset=output_nodeset
@@ -232,6 +233,7 @@ class RandomWalkWithRestart(Observable):
 class Propagation(Observable):
 	input_variable_index=0
 	output_variable_index=1
+	obs_dim_idx=1
 	sparse = False
 
 	def __init__(self, input_vector=None, proj_vector=None, length=1, normalized=False):
@@ -285,52 +287,54 @@ class Propagation(Observable):
 		return np.asarray(m / d[:, None])
 
 class CompoundObservable:
-	def __init__(self, obs_list, nid_pair_list, reduce_func='multiply'):
+	obs_dim_idx=1
+	def __init__(self, obs_list, nid_pair_list):
+		# Observables in obs_list have to be matrix operator-like and expose two variables input_variable_index and
+		# output_variable_index specifying the index of the input and output variable for the operator
 		self.obs_list = obs_list
 		self.nid_pair_list = nid_pair_list
-		self.reduce_func = reduce_func
-		#if isinstance(link_variable_index,int):
-		#	self.link_variable_index = [link_variable_index for _ in range(len(obs_list)-1)]
-		#else:
-		#	self.link_variable_index = link_variable_index
+		if not self.check_consistency(obs_list):
+			raise ValueError('Input and output variables have to be defined only for the first and last observables of the list')
 
 	def func(self, adj_list):
-		if self.reduce_func == 'multiply':
-			obs_value = self[0].f_args[self[0].input_variable_index]
-			for i in range(len(adj_list)):
-				f_args = list(self[i].f_args)
-				f_args[self[i].input_variable_index] = obs_value
-				obs_value = self[i].func(adj_list[i], *f_args)
-		elif self.reduce_func == 'sum':
-			obs_value = self[0].func(adj_list[0], *self[0].f_args)
-			for i in range(1,len(adj_list)):
-				obs_value = obs_value + self[i].func(adj_list[i], self[i].f_args)
-		else:
-			raise ValueError('Invalid value for parameter reduce_func: possible choices are either \'multiply\' or \'sum\'')
+		obs_value = self[0].f_args[self[0].input_variable_index]
+		for i in range(len(adj_list)):
+			f_args = list(self[i].f_args)
+			f_args[self[i].input_variable_index] = obs_value
+			obs_value = self[i].func(adj_list[i], *f_args)
 		return obs_value
 
 	def backprop(self, adj_list):
-		if self.reduce_func == 'multiply':
-			obs_value = self[-1].f_args[self[-1].output_variable_index]
-			for i in range(len(adj_list)):
-				f_args = list(self[i].f_args)
-				f_args[self[-i-1].input_variable_index] = obs_value
-				obs_value = self[-i-1].backprop(adj_list[-i-1], *f_args)
-		elif self.reduce_func == 'sum':
-			raise NotImplementedError
-		else:
-			raise ValueError('Invalid value for parameter reduce_func: possible choices are either \'multiply\' or \'sum\'')
+		obs_value = self[-1].f_args[self[-1].output_variable_index]
+		for i in range(len(adj_list)):
+			f_args = list(self[-i-1].f_args)
+			f_args[self[-i-1].input_variable_index] = obs_value
+			f_args[self[-i-1].output_variable_index] = None # To prevent the result being projected (should happen only in last obs of the chain)
+			obs_value = self[-i-1].backprop(adj_list[-i-1], *f_args)
 		return obs_value
 
 	def grad(self, adj_list, term_num):
-		if self.reduce_func == 'multiply':
-			xprime = self.func(adj_list[:term_num]) if term_num > 0 else self[0].f_args[self[0].input_variable_index]
-			yprime = self.backprop(adj_list[term_num+1:]) if term_num < len(self)-1 else self[-1].f_args[self[-1].output_variable_index]
+		xprime = self.func(adj_list[:term_num])
+		yprime = self.backprop(adj_list[term_num+1:])
 
-			grad_value = self[term_num].grad(adj_list[term_num],xprime)
-			grad_value = grad_value * yprime[None,:]
-
+		g_args = list(self[term_num].g_args)
+		g_args[self[term_num].input_variable_index] = xprime
+		grad_value = self[term_num].grad(adj_list[term_num],*g_args)
+		grad_value = grad_value * yprime[None,:]
 		return grad_value
+
+	def check_consistency(self, obs_list):
+		if obs_list[0].f_args[obs_list[0].input_variable_index] is None:
+			return False
+		if obs_list[-1].f_args[obs_list[-1].output_variable_index] is None:
+			return False
+		for i,obs in enumerate(obs_list):
+			if obs_list[i].f_args[obs_list[i].output_variable_index] is not None:
+				return False
+			if obs_list[i].f_args[obs_list[i].output_variable_index] is not None:
+				return False
+
+
 
 	def __getitem__(self, obs_id):
 		return self.obs_list[obs_id]
