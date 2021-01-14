@@ -2,12 +2,12 @@ from setuptools import setup
 
 setup(
     # Needed to silence warnings (and to be a worthwhile package)
-    name='claude',
+    name='pyclaude',
     url='https://github.com/reemagit/claude',
     author='Enrico Maiorino',
     author_email='enrico.maiorino@gmail.com',
     # Needed to actually package something
-    packages=['claude'],
+    packages=['pyclaude'],
     # Needed for dependencies
     install_requires=['numpy', 'scipy', 'tqdm'],
     # *strongly* suggested for sharing
