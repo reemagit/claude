@@ -58,7 +58,10 @@ class Connectivity(Observable):
 	@staticmethod
 	def grad(adj, nodeset1=None, nodeset2=None, sparse=False):
 		if nodeset1 is None:
-			return np.triu(np.ones(adj.shape))
+			if sparse:
+				return sp.csr_matrix(np.triu(np.ones(adj.shape)))
+			else:
+				return np.triu(np.ones(adj.shape))
 		elif nodeset2 is None:
 			nodeset1 = np.asarray(nodeset1)
 			if sparse:

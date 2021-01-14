@@ -59,13 +59,14 @@ class GraphEnsemble:
 		if g_args is None:
 			g_args = []
 		if batch_size is None:
-			grad_term = func_grad(self.adj_matrix, *g_args)
 			if obs.sparse:
+				grad_term = func_grad(self.adj_matrix, *g_args, sparse=True)
 				sum_dims = None if obs_dim_idx is None else 1-obs_dim_idx # scipy sparse does not support tuple axes
-				std_vec = np.squeeze(np.asarray(np.sqrt((grad_term.multiply(self.sigma) ** 2).sum(axis=sum_dims))))
+				std_vec = np.squeeze(np.asarray(np.sqrt(grad_term.multiply(self.sigma).power(2).sum(axis=sum_dims))))
 				if obs_dim_idx is None:
 					std_vec = std_vec.item() # sparse returns a numpy scalar, so convert to float
 			else:
+				grad_term = func_grad(self.adj_matrix, *g_args)
 				sum_dims = tuple([dim for dim in range(len(grad_term.shape)) if dim != obs_dim_idx])
 				std_vec = np.sqrt(((self.sigma * grad_term) ** 2).sum(axis=sum_dims))
 		else:
