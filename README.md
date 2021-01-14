@@ -13,7 +13,7 @@
     <a href="[repo-url]"><strong>Explore the docs (WIP)»</strong></a>
     <br />
     <br />
-    <a href="[repo-url]/tree/master/demos">View Demos</a>
+    <a href="https://github.com/reemagit/claude/blob/master/demos/main_demo.ipynb">View Demos</a>
   </p>
 </p>
 
