@@ -11,7 +11,7 @@ setup(
     # Needed for dependencies
     install_requires=['numpy', 'scipy', 'tqdm'],
     # *strongly* suggested for sharing
-    version='0.1',
+    version='0.1.1',
     # The license can be anything you like
     license='MIT',
     description='Exponential Random Graph models as null models for network analysis',
