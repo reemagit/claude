@@ -9,6 +9,8 @@ def has_method(o, name):
 
 def save_ensemble(ge, filepath, save_space=False):
 	if save_space:
+		from copy import copy
+		ge = ge.copy()
 		ge.adj_matrix=None
 		ge.sigma=None
 	ge.save(filepath)
